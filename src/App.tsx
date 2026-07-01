@@ -31,8 +31,26 @@ import {
   Bug,
   Braces,
   Settings,
-  HardDrive
+  HardDrive,
+  History,
+  Trash2,
+  Clock,
+  FileDown,
+  FileJson,
+  Download,
+  Filter,
+  Layout,
+  BarChart3,
+  Layers,
+  Zap,
+  Mail,
+  Loader2,
+  CheckCircle2,
+  AlertCircle
 } from "lucide-react";
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { Analytics } from "@vercel/analytics/react";
+import { db } from './lib/firebase';
 import Header from "./components/Header";
 import ThreatMap from "./components/ThreatMap";
 import Terminal from "./components/Terminal";
@@ -53,10 +71,208 @@ export default function App() {
   });
   
   // Custom states for interactive scanner
+  const defaultScanHistory: SecurityScanResult[] = [
+    {
+      target: "vulnerable-api.internal",
+      timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      ports: [
+        { port: 22, service: "SSH", status: "open", banner: "OpenSSH 8.2p1 Ubuntu-4ubuntu0.5" },
+        { port: 80, service: "HTTP", status: "open", banner: "Apache/2.4.41" },
+        { port: 3000, service: "NodeJS", status: "open", banner: "Express/Vite Dev" }
+      ],
+      vulnerabilities: [
+        {
+          cve: "CVE-2024-9102",
+          title: "SQL Injection on Auth Entrypoint",
+          severity: "HIGH",
+          description: "Parameter login handler allows raw SQL statements via injection payload, leading to authentication bypass.",
+          remediation: "Implement prepared statements and parameterized queries for all database connection drivers."
+        },
+        {
+          cve: "CVE-2024-4112",
+          title: "Outdated SSH Host Key Exchange Weakness",
+          severity: "MEDIUM",
+          description: "SSH daemon supports obsolete cipher suites risking decryption or session hijacking under specific OSINT criteria.",
+          remediation: "Update /etc/ssh/sshd_config to allow only strong modern HMACs and cipher algorithms."
+        }
+      ],
+      remediationReport: `### Executive Summary: vulnerable-api.internal
+Our AI security auditor has detected a critical injection vector on the authentication route. Immediate containment is advised.
+
+### Vulnerability Assessment
+- **SQL Injection**: Allows unauthorized attackers to bypass authentication layers.
+- **SSH Weakness**: Outdated key exchange configurations.
+
+### Defense Action Plan
+1. **Apply Prepared Statements**: Update backend authentication router with parameterization.
+2. **Harder SSH Settings**: Enforce modern SSH protocols.`,
+      status: "completed"
+    },
+    {
+      target: "corporate-sandbox.net",
+      timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      ports: [
+        { port: 80, service: "HTTP", status: "open", banner: "nginx/1.18.0" },
+        { port: 443, service: "HTTPS", status: "open", banner: "nginx/1.18.0" }
+      ],
+      vulnerabilities: [
+        {
+          cve: "CVE-2023-35123",
+          title: "HTTP Header Information Disclosure",
+          severity: "LOW",
+          description: "Web server exposes exact backend version details in response headers (nginx/1.18.0).",
+          remediation: "Configure ServerTokens off in nginx configurations."
+        }
+      ],
+      remediationReport: `### Executive Summary: corporate-sandbox.net
+Security posture is mostly safe. Exposure is limited to low-severity version disclosure on public endpoints.
+
+### Vulnerability Assessment
+- **Information Disclosure**: HTTP header exposes explicit service signatures.
+
+### Defense Action Plan
+1. **Disable Server Banners**: Turn off detailed version telemetry in nginx configurations.`,
+      status: "completed"
+    }
+  ];
+
+  const [scanHistory, setScanHistory] = useState<SecurityScanResult[]>(() => {
+    const saved = localStorage.getItem("rexdevcyber_scan_history");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.map((item: any) => ({ ...item, status: item.status || "completed" }));
+      } catch (e) {
+        return defaultScanHistory;
+      }
+    }
+    return defaultScanHistory;
+  });
+
+  // Contact Form State
+  const [contactForm, setContactForm] = useState({
+    name: "",
+    email: "",
+    message: ""
+  });
+  const [contactStatus, setContactStatus] = useState<"idle" | "submitting" | "success" | "error">("idle");
+
+  const handleContactSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!contactForm.name || !contactForm.email || !contactForm.message) return;
+
+    setContactStatus("submitting");
+    try {
+      await addDoc(collection(db, "contacts"), {
+        ...contactForm,
+        createdAt: serverTimestamp()
+      });
+      setContactStatus("success");
+      setContactForm({ name: "", email: "", message: "" });
+      setTimeout(() => setContactStatus("idle"), 5000);
+    } catch (error) {
+      console.error("Error submitting contact form:", error);
+      setContactStatus("error");
+      setTimeout(() => setContactStatus("idle"), 5000);
+    }
+  };
+
+  const [severityFilter, setSeverityFilter] = useState<string>("ALL");
+
+  const [scanResult, setScanResult] = useState<SecurityScanResult | null>(() => {
+    const saved = localStorage.getItem("rexdevcyber_scan_history");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed[0] || null;
+      } catch (e) {
+        return defaultScanHistory[0];
+      }
+    }
+    return defaultScanHistory[0];
+  });
+
+  useEffect(() => {
+    localStorage.setItem("rexdevcyber_scan_history", JSON.stringify(scanHistory));
+  }, [scanHistory]);
+
+  const getMaxSeverity = (res: SecurityScanResult) => {
+    if (!res.vulnerabilities || res.vulnerabilities.length === 0) return "SECURE";
+    const severities = res.vulnerabilities.map(v => v.severity);
+    if (severities.includes("CRITICAL")) return "CRITICAL";
+    if (severities.includes("HIGH")) return "HIGH";
+    if (severities.includes("MEDIUM")) return "MEDIUM";
+    if (severities.includes("LOW")) return "LOW";
+    return "SECURE";
+  };
+
+  const handleDeleteHistoryItem = (itemToDelete: SecurityScanResult) => {
+    const confirmed = window.confirm(`[MANDATE] Are you sure you want to delete the scan report for "${itemToDelete.target}" from your SOC audit history?`);
+    if (!confirmed) return;
+    
+    setScanHistory(prev => {
+      const updated = prev.filter(item => !(item.target === itemToDelete.target && item.timestamp === itemToDelete.timestamp));
+      return updated;
+    });
+
+    setScanResult(current => {
+      if (current && current.target === itemToDelete.target && current.timestamp === itemToDelete.timestamp) {
+        return null;
+      }
+      return current;
+    });
+  };
+  
+  const handleExportTxt = (result: SecurityScanResult) => {
+    const content = `REXDEVCYBER SECURITY AUDIT REPORT
+====================================
+TARGET: ${result.target}
+TIMESTAMP: ${new Date(result.timestamp).toLocaleString()}
+STATUS: ${result.status?.toUpperCase() || "COMPLETED"}
+
+PORT TELEMETRY:
+${result.ports.map(p => `- ${p.port}/${p.service} (${p.status}): ${p.banner || "N/A"}`).join('\n')}
+
+VULNERABILITIES:
+${result.vulnerabilities.map(v => `
+[!] ${v.cve}: ${v.title}
+SEVERITY: ${v.severity}
+DESCRIPTION: ${v.description}
+REMEDIATION: ${v.remediation}
+`).join('\n')}
+
+EXECUTIVE SUMMARY:
+${result.remediationReport}
+
+------------------------------------
+REXDEVCYBER - Advanced Security Intelligence
+`;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `rexdevcyber_audit_${result.target.replace(/[^a-z0-9]/gi, '_')}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportJson = (result: SecurityScanResult) => {
+    const data = JSON.stringify(result, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `rexdevcyber_audit_${result.target.replace(/[^a-z0-9]/gi, '_')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const [scanTarget, setScanTarget] = useState("");
   const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<SecurityScanResult | null>(null);
-  const [scanHistory, setScanHistory] = useState<SecurityScanResult[]>([]);
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStage, setScanStage] = useState<"Port Enumeration" | "Vulnerability Matching" | "Remediation Generation" | "Completed" | "">("");
   const [liveScanLogs, setLiveScanLogs] = useState<string[]>([]);
@@ -128,6 +344,28 @@ export default function App() {
       "[SYSTEM] Establishing socket handshake with core SOC layer...",
       "[SYSTEM] Authorization key validated. Commencing scanner engine."
     ]);
+
+    const scanTimestamp = new Date().toISOString();
+    const pendingItem: SecurityScanResult = {
+      target: targetToScan,
+      timestamp: scanTimestamp,
+      ports: [],
+      vulnerabilities: [],
+      remediationReport: "",
+      status: "pending"
+    };
+    setScanHistory(prev => [pendingItem, ...prev]);
+
+    // Transition to running state shortly after initiation
+    setTimeout(() => {
+      setScanHistory(prev =>
+        prev.map(item =>
+          item.target === targetToScan && item.timestamp === scanTimestamp
+            ? { ...item, status: "running" as const }
+            : item
+        )
+      );
+    }, 1200);
 
     // Pre-allocate diagnostic logs to progressively print
     const logPool = {
@@ -204,7 +442,8 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error("Scan request blocked or refused by firewalled endpoint.");
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Scan request blocked or refused by firewalled endpoint.");
       }
 
       const data: SecurityScanResult = await response.json();
@@ -220,8 +459,25 @@ export default function App() {
           "[SYSTEM] Mitigation playbook built.", 
           "[SYSTEM] Audit scan successfully completed. Displaying report."
         ]);
-        setScanResult(data);
-        setScanHistory((prev) => [data, ...prev]);
+
+        const completedData: SecurityScanResult = {
+          ...data,
+          status: "completed"
+        };
+
+        setScanResult(completedData);
+        setScanHistory((prev) => {
+          const hasPlaceholder = prev.some(item => item.target === targetToScan && (item.status === "pending" || item.status === "running"));
+          if (hasPlaceholder) {
+            return prev.map(item => 
+              item.target === targetToScan && (item.status === "pending" || item.status === "running")
+                ? completedData
+                : item
+            );
+          } else {
+            return [completedData, ...prev.filter(item => item.target !== targetToScan)];
+          }
+        });
         setScanning(false);
       };
 
@@ -246,33 +502,29 @@ export default function App() {
       setScanning(false);
       console.error(err);
       alert(err.message || "An error occurred while running the security audit.");
+      setScanHistory((prev) => prev.filter(item => !(item.target === targetToScan && (item.status === "pending" || item.status === "running"))));
     }
   };
 
   const handleNavClick = (tab: string) => {
     setActiveTab(tab);
-    if (tab === "home") {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    } else if (tab === "about") {
+    // Always scroll to top when switching main views
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    
+    // Additional sub-section scrolling if needed when on home tab
+    if (tab === "about" && document.getElementById("about-section")) {
       document.getElementById("about-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    } else if (tab === "services") {
-      document.getElementById("services-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    } else if (tab === "projects") {
-      document.getElementById("projects-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    } else if (tab === "tools") {
-      document.getElementById("soc-tools-suite")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    } else if (tab === "contact") {
-      document.getElementById("contact-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   };
 
   return (
     <div className="min-h-screen bg-[#05070d] text-slate-300 flex flex-col font-sans selection:bg-[#ff2020] selection:text-white relative overflow-hidden">
+      <Analytics />
       {/* Interactive Particles Layer */}
       <ParticlesBg />
 
       {/* Premium Header Component */}
-      <Header activeTab={activeTab} onNavClick={setActiveTab} />
+      <Header activeTab={activeTab} onNavClick={handleNavClick} />
 
       {/* Main Grid Viewport */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col lg:flex-row gap-8 relative z-10">
@@ -451,11 +703,14 @@ export default function App() {
           {/* Interactive Navigation Content tabs */}
           <div className="border border-slate-900 bg-black/50 backdrop-blur-md rounded-xl p-1.5 flex gap-1.5 overflow-x-auto">
             {[
-              { id: "home", label: "Threat Map & Feed", icon: Globe },
-              { id: "terminal", label: "SOC CLI Console", icon: TerminalIcon },
-              { id: "projects", label: "Repositories & Code", icon: FileCode },
-              { id: "scanner", label: "AI Cyber Auditing", icon: ShieldCheck },
-              { id: "drive", label: "Secure Drive Vault", icon: HardDrive },
+              { id: "home", label: "Dashboard", icon: Globe },
+              { id: "terminal", label: "SOC Console", icon: TerminalIcon },
+              { id: "about", label: "About Brand", icon: Info },
+              { id: "tools", label: "Tech Stack", icon: Cpu },
+              { id: "services", label: "Services", icon: Layout },
+              { id: "projects", label: "Projects", icon: FileCode },
+              { id: "scanner", label: "AI Scanner", icon: ShieldCheck },
+              { id: "contact", label: "Contact", icon: Mail },
             ].map((tab) => {
               const Icon = tab.icon;
               return (
@@ -826,10 +1081,745 @@ export default function App() {
                   </div>
                 )}
 
+                {/* Professional Services Portfolio View */}
+                {activeTab === "services" && (
+                  <div className="space-y-8 animate-in fade-in duration-700">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-900 pb-6">
+                      <div className="space-y-1">
+                        <h2 className="text-2xl font-display font-black text-white tracking-tight">PROFESSIONAL SERVICES</h2>
+                        <p className="text-xs font-mono text-slate-500 uppercase tracking-[0.2em]">Advanced Cybersecurity, Web Development & AI Solutions</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-400/5 px-2 py-1 rounded border border-emerald-400/20">CAPACITY: 92%</span>
+                        <button className="bg-red-600 hover:bg-red-500 text-white font-mono font-bold text-[10px] px-4 py-2 rounded-lg transition-all shadow-[0_0_15px_rgba(255,32,32,0.2)]">
+                          REQUEST QUOTE
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {/* 1. Cybersecurity Services */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group">
+                        <div className="h-12 w-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-5 group-hover:scale-110 transition-transform">
+                          <Shield className="h-6 w-6 text-red-500" />
+                        </div>
+                        <h3 className="text-lg font-bold text-white mb-2 font-mono">Cybersecurity</h3>
+                        <ul className="space-y-2">
+                          {[
+                            "Penetration Testing (Web, Mobile, API)",
+                            "Vulnerability Assessment (VAPT)",
+                            "Network Security Assessment",
+                            "Cloud Security (AWS, Azure, GCP)",
+                            "Security Audits",
+                            "Incident Response & Digital Forensics",
+                            "Threat Hunting & Malware Analysis",
+                            "Security Awareness Training"
+                          ].map(item => (
+                            <li key={item} className="text-[11px] text-slate-400 flex items-start gap-2">
+                              <span className="text-red-500 mt-0.5">▹</span> {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* 2. Development Services */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group">
+                        <div className="h-12 w-12 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center mb-5 group-hover:scale-110 transition-transform">
+                          <Code className="h-6 w-6 text-cyan-400" />
+                        </div>
+                        <h3 className="text-lg font-bold text-white mb-2 font-mono">Development</h3>
+                        <ul className="space-y-2">
+                          {[
+                            "Custom Website Development",
+                            "Web Application Development",
+                            "Mobile App Development",
+                            "REST API Development",
+                            "Automation Scripts (Python, Bash, PS)",
+                            "DevSecOps Integration",
+                            "CI/CD Pipeline Security"
+                          ].map(item => (
+                            <li key={item} className="text-[11px] text-slate-400 flex items-start gap-2">
+                              <span className="text-cyan-400 mt-0.5">▹</span> {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* 3. Infrastructure & Cloud */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group">
+                        <div className="h-12 w-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center mb-5 group-hover:scale-110 transition-transform">
+                          <Server className="h-6 w-6 text-purple-400" />
+                        </div>
+                        <h3 className="text-lg font-bold text-white mb-2 font-mono">Infrastructure</h3>
+                        <ul className="space-y-2">
+                          {[
+                            "Linux Server Administration",
+                            "Docker & Kubernetes Deployment",
+                            "VPN & Firewall Configuration",
+                            "Web Hosting & Domain Management",
+                            "Cloud Migration & Optimization"
+                          ].map(item => (
+                            <li key={item} className="text-[11px] text-slate-400 flex items-start gap-2">
+                              <span className="text-purple-400 mt-0.5">▹</span> {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* 4. AI & Automation */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group">
+                        <div className="h-12 w-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mb-5 group-hover:scale-110 transition-transform">
+                          <Zap className="h-6 w-6 text-amber-400" />
+                        </div>
+                        <h3 className="text-lg font-bold text-white mb-2 font-mono">AI & Automation</h3>
+                        <ul className="space-y-2">
+                          {[
+                            "AI Chatbots & Virtual Assistants",
+                            "AI Security Assistant",
+                            "SOC Automation & Response",
+                            "Security Monitoring Dashboards",
+                            "Log Analysis & SIEM Integration"
+                          ].map(item => (
+                            <li key={item} className="text-[11px] text-slate-400 flex items-start gap-2">
+                              <span className="text-amber-400 mt-0.5">▹</span> {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* 5. Digital Services */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group">
+                        <div className="h-12 w-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-5 group-hover:scale-110 transition-transform">
+                          <Layout className="h-6 w-6 text-emerald-400" />
+                        </div>
+                        <h3 className="text-lg font-bold text-white mb-2 font-mono">Digital Services</h3>
+                        <ul className="space-y-2">
+                          {[
+                            "Portfolio Website Design",
+                            "Corporate Website Development",
+                            "UI/UX Design & Prototyping",
+                            "SEO Optimization & Analytics",
+                            "Website Maintenance & Support"
+                          ].map(item => (
+                            <li key={item} className="text-[11px] text-slate-400 flex items-start gap-2">
+                              <span className="text-emerald-400 mt-0.5">▹</span> {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* 6. Consulting */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group">
+                        <div className="h-12 w-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-5 group-hover:scale-110 transition-transform">
+                          <BarChart3 className="h-6 w-6 text-blue-400" />
+                        </div>
+                        <h3 className="text-lg font-bold text-white mb-2 font-mono">Consulting</h3>
+                        <ul className="space-y-2">
+                          {[
+                            "Cybersecurity Strategy & Roadmap",
+                            "Risk Assessment & Management",
+                            "Compliance Support (ISO, NIST, PCI)",
+                            "Startup Security Consulting",
+                            "Security Architecture Review"
+                          ].map(item => (
+                            <li key={item} className="text-[11px] text-slate-400 flex items-start gap-2">
+                              <span className="text-blue-400 mt-0.5">▹</span> {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+
+                    {/* Bottom CTA / Banner */}
+                    <div className="p-8 rounded-3xl border border-slate-900 bg-gradient-to-br from-slate-950 to-black relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-4 opacity-5">
+                        <Layers className="h-32 w-32" />
+                      </div>
+                      <div className="relative z-10 max-w-2xl space-y-4">
+                        <h3 className="text-xl font-bold text-white">Need a custom solution for your enterprise?</h3>
+                        <p className="text-xs text-slate-400 leading-relaxed">
+                          REXDEVCYBER specializes in bridging the gap between cutting-edge development and rigorous security standards. Our team is ready to help you Secure, Build, and Innovate your next big project.
+                        </p>
+                        <div className="flex items-center gap-4 pt-2">
+                          <button className="px-6 py-2.5 bg-white text-black font-bold font-mono text-[10px] rounded-lg hover:bg-slate-200 transition-all">
+                            SCHEDULE DISCOVERY CALL
+                          </button>
+                          <span className="text-[10px] font-mono text-slate-500">Available Mon-Fri, 09:00 - 18:00 UTC</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* About Rexdevcyber View */}
+                {activeTab === "about" && (
+                  <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                    {/* Hero Branding */}
+                    <div className="relative p-12 rounded-[2rem] border border-slate-900 bg-gradient-to-br from-slate-950 via-black to-slate-950 overflow-hidden">
+                      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 mix-blend-soft-light"></div>
+                      <div className="relative z-10 text-center space-y-6">
+                        <motion.div 
+                          initial={{ scale: 0.8, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          transition={{ duration: 0.8 }}
+                          className="inline-flex h-20 w-20 items-center justify-center rounded-2xl bg-red-600/10 border border-red-600/20 mb-4"
+                        >
+                          <Shield className="h-10 w-10 text-red-600" />
+                        </motion.div>
+                        <h1 className="text-4xl md:text-6xl font-display font-black text-white tracking-tighter uppercase italic">
+                          REXDEV<span className="text-red-600">CYBER</span>
+                        </h1>
+                        <p className="text-sm font-mono text-slate-400 max-w-3xl mx-auto leading-relaxed tracking-wide">
+                          Rexdevcyber is a technology and cybersecurity brand focused on building secure, scalable, and innovative digital solutions. We combine cybersecurity expertise, software development, cloud technologies, and AI-powered automation to help businesses and individuals strengthen their digital presence while reducing cyber risks.
+                        </p>
+                        <div className="flex items-center justify-center gap-4 pt-4">
+                          <div className="h-[1px] w-12 bg-slate-800"></div>
+                          <span className="text-[10px] font-mono text-slate-500 uppercase tracking-[0.4em]">Secure. Build. Innovate.</span>
+                          <div className="h-[1px] w-12 bg-slate-800"></div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                      {/* Left Column: Mission, Vision & Philosophy */}
+                      <div className="lg:col-span-2 space-y-8">
+                        <div className="p-8 rounded-2xl border border-slate-900 bg-black/40 backdrop-blur-sm space-y-8">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div className="space-y-4">
+                              <h3 className="text-xl font-bold text-white flex items-center gap-3">
+                                <span className="h-8 w-1 bg-red-600 rounded-full"></span>
+                                MISSION
+                              </h3>
+                              <p className="text-sm text-slate-400 leading-relaxed">
+                                To provide advanced cybersecurity and software engineering solutions that empower organizations to innovate with confidence.
+                              </p>
+                            </div>
+
+                            <div className="space-y-4">
+                              <h3 className="text-xl font-bold text-white flex items-center gap-3">
+                                <span className="h-8 w-1 bg-cyan-500 rounded-full"></span>
+                                VISION
+                              </h3>
+                              <p className="text-sm text-slate-400 leading-relaxed">
+                                To become a trusted global technology partner recognized for excellence in cybersecurity, secure software development, and digital innovation.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="pt-6 border-t border-slate-900 space-y-4">
+                            <h3 className="text-lg font-bold text-white font-mono">Our Approach</h3>
+                            <p className="text-sm text-slate-400 leading-relaxed italic">
+                              "At Rexdevcyber, security is integrated into every stage of development—from planning and design to deployment and continuous monitoring. Our approach emphasizes innovation, transparency, and industry best practices to build resilient digital environments."
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Core Values Grid */}
+                        <div className="space-y-4">
+                          <h4 className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-[0.25em] pl-2">CORE VALUES</h4>
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            {[
+                              { title: "Security First", color: "bg-red-500/10 text-red-500 border-red-500/20" },
+                              { title: "Innovation", color: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
+                              { title: "Integrity", color: "bg-purple-500/10 text-purple-400 border-purple-500/20" },
+                              { title: "Excellence", color: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
+                              { title: "Continuous Learning", color: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" },
+                              { title: "Customer Success", color: "bg-blue-500/10 text-blue-400 border-blue-500/20" }
+                            ].map((value) => (
+                              <div key={value.title} className={`p-4 rounded-xl border ${value.color} text-center font-mono font-bold text-[10px] tracking-wider uppercase group hover:scale-105 transition-transform cursor-default`}>
+                                {value.title}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right Column: Specialization List */}
+                      <div className="space-y-6">
+                        <div className="p-6 rounded-2xl border border-slate-900 bg-slate-950/50">
+                          <h4 className="text-xs font-mono font-bold text-slate-500 uppercase tracking-widest mb-6 pb-2 border-b border-slate-900">SPECIALIZATIONS</h4>
+                          <ul className="space-y-4">
+                            {[
+                              "Cybersecurity Assessments & Penetration Testing",
+                              "Vulnerability Assessment and Risk Analysis",
+                              "Secure Web & API Development",
+                              "Cloud Security & Infrastructure",
+                              "DevSecOps & Automation",
+                              "AI-Powered Security Solutions",
+                              "Digital Forensics & Incident Response",
+                              "Security Consulting & Compliance"
+                            ].map((spec) => (
+                              <li key={spec} className="flex items-center gap-3 group">
+                                <div className="h-1.5 w-1.5 rounded-full bg-red-600 group-hover:scale-150 transition-transform"></div>
+                                <span className="text-[11px] text-slate-400 font-mono group-hover:text-white transition-colors leading-tight">{spec}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        <div className="p-6 rounded-2xl border border-red-900/30 bg-red-950/5 text-center space-y-4">
+                          <p className="text-[10px] font-mono text-red-400/80 uppercase">Est.</p>
+                          <p className="text-2xl font-display font-black text-white">2024</p>
+                          <p className="text-[9px] font-mono text-slate-500 leading-tight">Empowering organizations to innovate with confidence.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tools & Technologies View */}
+                {activeTab === "tools" && (
+                  <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-900 pb-8">
+                      <div className="space-y-2">
+                        <h2 className="text-3xl font-display font-black text-white tracking-tighter uppercase italic">
+                          TOOLS <span className="text-red-600">&</span> TECHNOLOGIES
+                        </h2>
+                        <p className="text-[10px] font-mono text-slate-500 uppercase tracking-[0.3em]">Advanced Stack & Security Arsenal</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="h-2 w-2 rounded-full bg-red-600 animate-pulse"></div>
+                        <span className="text-[9px] font-mono text-slate-400">UPDATED: 2024.Q4</span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {/* 1. Cybersecurity Arsenal */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group overflow-hidden relative">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                          <ShieldAlert className="h-24 w-24" />
+                        </div>
+                        <div className="flex items-center gap-4 mb-6">
+                          <div className="h-10 w-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                            <Shield className="h-5 w-5 text-red-500" />
+                          </div>
+                          <h3 className="text-lg font-bold text-white font-mono">Cybersecurity</h3>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            "Kali Linux", "Metasploit", "Burp Suite", "Nmap", "Wireshark", 
+                            "OWASP ZAP", "Nessus", "OpenVAS", "Nikto", "SQLMap", 
+                            "Hydra", "John the Ripper", "Hashcat", "Snort", "Splunk"
+                          ].map(tool => (
+                            <span key={tool} className="text-[10px] font-mono px-2 py-1 bg-slate-950/80 border border-slate-900 text-slate-400 rounded-md group-hover:border-red-500/30 group-hover:text-red-400 transition-all">
+                              {tool}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 2. Languages & Development */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group overflow-hidden relative">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                          <Code className="h-24 w-24" />
+                        </div>
+                        <div className="flex items-center gap-4 mb-6">
+                          <div className="h-10 w-10 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                            <FileCode className="h-5 w-5 text-cyan-400" />
+                          </div>
+                          <h3 className="text-lg font-bold text-white font-mono">Programming</h3>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            "Python", "TypeScript", "JavaScript", "PHP", "Java", "C++", 
+                            "Go", "Rust", "Bash", "PowerShell"
+                          ].map(lang => (
+                            <span key={lang} className="text-[10px] font-mono px-2 py-1 bg-slate-950/80 border border-slate-900 text-slate-400 rounded-md group-hover:border-cyan-500/30 group-hover:text-cyan-400 transition-all">
+                              {lang}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 3. Web Frameworks */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group overflow-hidden relative">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                          <Globe className="h-24 w-24" />
+                        </div>
+                        <div className="flex items-center gap-4 mb-6">
+                          <div className="h-10 w-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                            <Layout className="h-5 w-5 text-emerald-400" />
+                          </div>
+                          <h3 className="text-lg font-bold text-white font-mono">Frontend & Backend</h3>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            "React", "Next.js", "Vue.js", "Node.js", "Express.js", 
+                            "Django", "FastAPI", "Laravel", "Tailwind CSS", "Bootstrap"
+                          ].map(web => (
+                            <span key={web} className="text-[10px] font-mono px-2 py-1 bg-slate-950/80 border border-slate-900 text-slate-400 rounded-md group-hover:border-emerald-500/30 group-hover:text-emerald-400 transition-all">
+                              {web}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 4. Databases & Storage */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group overflow-hidden relative">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                          <Database className="h-24 w-24" />
+                        </div>
+                        <div className="flex items-center gap-4 mb-6">
+                          <div className="h-10 w-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                            <Database className="h-5 w-5 text-purple-400" />
+                          </div>
+                          <h3 className="text-lg font-bold text-white font-mono">Databases</h3>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            "PostgreSQL", "MySQL", "MongoDB", "SQLite", "Redis", "Firebase"
+                          ].map(db => (
+                            <span key={db} className="text-[10px] font-mono px-2 py-1 bg-slate-950/80 border border-slate-900 text-slate-400 rounded-md group-hover:border-purple-500/30 group-hover:text-purple-400 transition-all">
+                              {db}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 5. Cloud & Infrastructure */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group overflow-hidden relative">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                          <Server className="h-24 w-24" />
+                        </div>
+                        <div className="flex items-center gap-4 mb-6">
+                          <div className="h-10 w-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                            <Server className="h-5 w-5 text-blue-400" />
+                          </div>
+                          <h3 className="text-lg font-bold text-white font-mono">Infrastructure</h3>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            "AWS", "Azure", "GCP", "Cloudflare", "Docker", "Kubernetes", 
+                            "Terraform", "Ansible", "Nginx", "Apache"
+                          ].map(cloud => (
+                            <span key={cloud} className="text-[10px] font-mono px-2 py-1 bg-slate-950/80 border border-slate-900 text-slate-400 rounded-md group-hover:border-blue-500/30 group-hover:text-blue-400 transition-all">
+                              {cloud}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 6. AI & Monitoring */}
+                      <div className="p-6 rounded-2xl border border-slate-900 bg-black/40 hover:bg-black/60 transition-all group overflow-hidden relative">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                          <Zap className="h-24 w-24" />
+                        </div>
+                        <div className="flex items-center gap-4 mb-6">
+                          <div className="h-10 w-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                            <Sparkles className="h-5 w-5 text-amber-400" />
+                          </div>
+                          <h3 className="text-lg font-bold text-white font-mono">AI & Monitoring</h3>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            "OpenAI", "Ollama", "LangChain", "n8n", "Make", 
+                            "Grafana", "Prometheus", "ELK Stack", "Uptime Kuma"
+                          ].map(ai => (
+                            <span key={ai} className="text-[10px] font-mono px-2 py-1 bg-slate-950/80 border border-slate-900 text-slate-400 rounded-md group-hover:border-amber-500/30 group-hover:text-amber-400 transition-all">
+                              {ai}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-8 rounded-2xl border border-slate-900 bg-slate-950/20 flex flex-col md:flex-row items-center gap-8">
+                      <div className="flex-1 space-y-4">
+                        <h4 className="text-xl font-bold text-white">Versatility & Selection</h4>
+                        <p className="text-xs text-slate-400 leading-relaxed max-w-2xl">
+                          We select the right technologies for each project, combining secure development practices, automation, cloud-native architecture, and continuous monitoring to deliver resilient, scalable, and future-ready solutions.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-6">
+                        <div className="text-center">
+                          <p className="text-2xl font-black text-white">50+</p>
+                          <p className="text-[9px] font-mono text-slate-500 uppercase">Tools Deployed</p>
+                        </div>
+                        <div className="h-8 w-px bg-slate-900"></div>
+                        <div className="text-center">
+                          <p className="text-2xl font-black text-white">100%</p>
+                          <p className="text-[9px] font-mono text-slate-500 uppercase">Secure Stack</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Contact View */}
+                {activeTab === "contact" && (
+                  <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                    <div className="p-12 rounded-[2rem] border border-slate-900 bg-gradient-to-br from-slate-950 via-black to-slate-950 text-center space-y-6">
+                      <div className="inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-red-600/10 border border-red-600/20 mb-2">
+                        <Mail className="h-8 w-8 text-red-600" />
+                      </div>
+                      <h2 className="text-3xl md:text-5xl font-display font-black text-white tracking-tighter uppercase italic">
+                        GET IN <span className="text-red-600">TOUCH</span>
+                      </h2>
+                      <p className="text-slate-400 max-w-2xl mx-auto font-mono text-sm leading-relaxed">
+                        Have a project in mind or need a security audit? Dispatches encrypted signals to the REXDEVCYBER core inbox.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                      <div className="p-8 rounded-2xl border border-slate-900 bg-black/40 backdrop-blur-sm space-y-8">
+                        <div className="space-y-4">
+                          <h3 className="text-lg font-bold text-white font-mono flex items-center gap-3">
+                            <span className="h-6 w-1 bg-red-600 rounded-full"></span>
+                            CONTACT INFORMATION
+                          </h3>
+                          <div className="space-y-6 pt-4">
+                            <div className="flex items-center gap-4 group">
+                              <div className="h-10 w-10 rounded-lg bg-slate-950 border border-slate-900 flex items-center justify-center text-slate-500 group-hover:text-red-500 transition-colors">
+                                <Mail className="h-5 w-5" />
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-mono text-slate-500 uppercase">Email</p>
+                                <p className="text-sm text-white font-mono">contact@rexdevcyber.com</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-4 group">
+                              <div className="h-10 w-10 rounded-lg bg-slate-950 border border-slate-900 flex items-center justify-center text-slate-500 group-hover:text-cyan-400 transition-colors">
+                                <Twitter className="h-5 w-5" />
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-mono text-slate-500 uppercase">Twitter / X</p>
+                                <p className="text-sm text-white font-mono">@rexdevcyber</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-4 group">
+                              <div className="h-10 w-10 rounded-lg bg-slate-950 border border-slate-900 flex items-center justify-center text-slate-500 group-hover:text-purple-400 transition-colors">
+                                <Github className="h-5 w-5" />
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-mono text-slate-500 uppercase">GitHub</p>
+                                <p className="text-sm text-white font-mono">github.com/rexdevcyber</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-6 rounded-xl border border-red-900/20 bg-red-950/5">
+                          <p className="text-[10px] font-mono text-slate-400 leading-relaxed italic">
+                            "Secure. Build. Innovate. We are ready to help you navigate the complex digital landscape with confidence."
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="p-8 rounded-2xl border border-slate-900 bg-black/40 backdrop-blur-sm">
+                        <form 
+                          onSubmit={handleContactSubmit}
+                          className="space-y-5"
+                        >
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-mono text-slate-500 uppercase font-bold px-1">Callsign / Name</label>
+                            <input 
+                              type="text" 
+                              placeholder="Enter your name"
+                              value={contactForm.name}
+                              onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
+                              required
+                              disabled={contactStatus === "submitting"}
+                              className="w-full bg-slate-950 border border-slate-900 rounded-xl px-4 py-3 text-white text-sm focus:border-red-600 outline-none transition-all font-mono disabled:opacity-50"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-mono text-slate-500 uppercase font-bold px-1">Secure Email</label>
+                            <input 
+                              type="email" 
+                              placeholder="your@email.com"
+                              value={contactForm.email}
+                              onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
+                              required
+                              disabled={contactStatus === "submitting"}
+                              className="w-full bg-slate-950 border border-slate-900 rounded-xl px-4 py-3 text-white text-sm focus:border-red-600 outline-none transition-all font-mono disabled:opacity-50"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-mono text-slate-500 uppercase font-bold px-1">Message Body</label>
+                            <textarea 
+                              rows={4}
+                              placeholder="State your request..."
+                              value={contactForm.message}
+                              onChange={(e) => setContactForm({ ...contactForm, message: e.target.value })}
+                              required
+                              disabled={contactStatus === "submitting"}
+                              className="w-full bg-slate-950 border border-slate-900 rounded-xl px-4 py-3 text-white text-sm focus:border-red-600 outline-none transition-all font-mono resize-none disabled:opacity-50"
+                            />
+                          </div>
+                          
+                          {contactStatus === "success" && (
+                            <div className="flex items-center gap-2 text-emerald-400 font-mono text-[10px] bg-emerald-500/5 p-3 rounded-lg border border-emerald-500/20 animate-in fade-in zoom-in duration-300">
+                              <CheckCircle2 className="h-4 w-4" />
+                              SECURE TRANSMISSION CONFIRMED: AES-256 DISPATCH SUCCESSFUL
+                            </div>
+                          )}
+
+                          {contactStatus === "error" && (
+                            <div className="flex items-center gap-2 text-red-500 font-mono text-[10px] bg-red-500/5 p-3 rounded-lg border border-red-500/20 animate-in fade-in zoom-in duration-300">
+                              <AlertCircle className="h-4 w-4" />
+                              TRANSMISSION FAILED: UPLINK ERROR DETECTED
+                            </div>
+                          )}
+
+                          <button 
+                            type="submit"
+                            disabled={contactStatus === "submitting"}
+                            className="w-full py-4 bg-red-600 hover:bg-red-500 text-white font-mono font-bold rounded-xl transition-all shadow-[0_0_20px_rgba(255,32,32,0.15)] flex items-center justify-center gap-3 group disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {contactStatus === "submitting" ? (
+                              <>
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                ENCRYPTING & DISPATCHING...
+                              </>
+                            ) : (
+                              <>
+                                <Lock className="h-4 w-4 group-hover:scale-110 transition-transform" />
+                                DISPATCH ENCRYPTED MESSAGE
+                              </>
+                            )}
+                          </button>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* AI Cyber Scanner Panel */}
                 {activeTab === "scanner" && (
-                  <div className="space-y-6">
-                    <div className="p-6 rounded-xl border border-slate-900 bg-black/60 backdrop-blur-md relative overflow-hidden">
+                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+                    {/* Recent Audit History Sidebar */}
+                    <div className="lg:col-span-1 space-y-4">
+                      <div className="p-4 rounded-xl border border-slate-900 bg-black/60 backdrop-blur-md font-mono relative overflow-hidden shadow-[0_4px_30px_rgba(0,0,0,0.5)]">
+                        <div className="flex flex-col gap-3 border-b border-slate-950 pb-3 mb-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                              <History className="h-4 w-4 shrink-0 animate-pulse" />
+                              RECENT AUDITS
+                            </span>
+                            <span className="text-[9px] text-slate-500 font-bold px-2 py-0.5 rounded bg-slate-950/80 border border-slate-900">
+                              {scanHistory.filter(item => severityFilter === "ALL" || getMaxSeverity(item) === severityFilter).length} / {scanHistory.length}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 bg-slate-950/50 rounded-lg border border-slate-900 px-2 py-1.5">
+                            <Filter className="h-3 w-3 text-slate-500" />
+                            <select 
+                              value={severityFilter}
+                              onChange={(e) => setSeverityFilter(e.target.value)}
+                              className="bg-transparent text-[10px] text-slate-400 font-mono outline-none w-full cursor-pointer hover:text-white transition-colors"
+                            >
+                              <option value="ALL">ALL LEVELS</option>
+                              <option value="CRITICAL">CRITICAL</option>
+                              <option value="HIGH">HIGH</option>
+                              <option value="MEDIUM">MEDIUM</option>
+                              <option value="LOW">LOW</option>
+                              <option value="SECURE">SECURE</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-900 scrollbar-track-transparent">
+                          {scanHistory.filter(item => severityFilter === "ALL" || getMaxSeverity(item) === severityFilter).length === 0 ? (
+                            <div className="py-8 text-center text-slate-500 text-[10px] space-y-2">
+                              <Info className="h-6 w-6 text-slate-700 mx-auto" />
+                              <p>{severityFilter === "ALL" ? "No previous audits recorded." : `No audits found with ${severityFilter} severity.`}</p>
+                            </div>
+                          ) : (
+                            scanHistory
+                              .filter(item => severityFilter === "ALL" || getMaxSeverity(item) === severityFilter)
+                              .map((item, idx) => {
+                              const maxSev = getMaxSeverity(item);
+                              const isSelected = scanResult?.target === item.target && scanResult?.timestamp === item.timestamp;
+                              
+                              let badgeColor = "bg-emerald-950/20 text-emerald-400 border border-emerald-900/30";
+                              let badgeText = maxSev;
+
+                              if (item.status === "pending") {
+                                badgeColor = "bg-amber-950/25 text-amber-500 border border-amber-900/40 animate-pulse";
+                                badgeText = "PENDING";
+                              } else if (item.status === "running") {
+                                badgeColor = "bg-cyan-950/25 text-cyan-400 border border-cyan-900/40 animate-pulse";
+                                badgeText = "RUNNING";
+                              } else {
+                                if (maxSev === "CRITICAL") badgeColor = "bg-red-950/40 text-red-500 border border-red-900/40";
+                                else if (maxSev === "HIGH") badgeColor = "bg-red-950/20 text-[#ff2020] border border-red-900/30";
+                                else if (maxSev === "MEDIUM") badgeColor = "bg-amber-950/20 text-amber-400 border border-amber-900/30";
+                                else if (maxSev === "LOW") badgeColor = "bg-cyan-950/20 text-cyan-400 border border-cyan-900/30";
+                              }
+
+                              return (
+                                <div
+                                  key={`${item.target}-${item.timestamp}-${idx}`}
+                                  className={`group relative p-3 rounded-lg border text-left transition-all duration-200 ${
+                                    isSelected 
+                                      ? "border-[#ff2020]/50 bg-red-950/5 shadow-[0_0_12px_rgba(255,32,32,0.05)]" 
+                                      : "border-slate-950 bg-[#05070d]/40 hover:border-slate-800 hover:bg-[#05070d]/80"
+                                  } ${
+                                    item.status === "pending" || item.status === "running"
+                                      ? "border-cyan-500/30 bg-cyan-950/5 shadow-[0_0_10px_rgba(6,182,212,0.1)] animate-pulse"
+                                      : scanning 
+                                        ? "opacity-50 pointer-events-none" 
+                                        : "cursor-pointer"
+                                  }`}
+                                  onClick={() => {
+                                    if (!scanning && item.status !== "pending" && item.status !== "running") {
+                                      setScanResult(item);
+                                      setScanTarget(item.target);
+                                    }
+                                  }}
+                                >
+                                  <div className="flex items-start justify-between gap-1.5 mb-1">
+                                    <span className="text-[11px] font-bold text-white truncate max-w-[120px] block group-hover:text-[#ff2020] transition-colors">
+                                      {item.target}
+                                    </span>
+                                    <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded uppercase ${badgeColor} shrink-0`}>
+                                      {badgeText}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center justify-between text-[9px] text-slate-500 mt-1.5">
+                                    <span className="flex items-center gap-1">
+                                      <Clock className="h-3.5 w-3.5 shrink-0 text-slate-600" />
+                                      {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                    <span className="flex items-center gap-1.5">
+                                      <span className={`h-1.5 w-1.5 rounded-full ${
+                                        item.status === "pending"
+                                          ? "bg-amber-400 animate-pulse"
+                                          : item.status === "running"
+                                            ? "bg-cyan-400 animate-pulse"
+                                            : "bg-emerald-500"
+                                      }`} />
+                                      <span className="text-[8px] font-mono font-semibold uppercase tracking-wider text-slate-400">
+                                        {item.status || "completed"}
+                                      </span>
+                                    </span>
+                                  </div>
+
+                                  {/* Delete Button */}
+                                  {item.status !== "pending" && item.status !== "running" && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteHistoryItem(item);
+                                      }}
+                                      className="absolute right-2 top-2 p-1 rounded bg-slate-950/80 border border-slate-900 text-slate-500 hover:text-red-500 hover:border-red-900/40 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer duration-200"
+                                      title="Purge audit from history"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Main Scanner Section */}
+                    <div className="lg:col-span-3 space-y-6">
+                      <div className="p-6 rounded-xl border border-slate-900 bg-black/60 backdrop-blur-md relative overflow-hidden">
                       <div className="absolute top-4 right-4 text-red-500/5">
                         <Shield className="h-16 w-16" />
                       </div>
@@ -1107,7 +2097,21 @@ export default function App() {
                         <div className="lg:col-span-2 rounded-xl border border-slate-900 bg-black/60 backdrop-blur-md p-5">
                           <h4 className="text-xs font-mono font-bold text-white uppercase tracking-wider mb-4 border-b border-slate-900 pb-2 flex items-center justify-between">
                             <span>VULNERABILITY ASSESSMENT REPORT</span>
-                            <span className="text-[10px] text-red-400 font-bold">AI COMPILED</span>
+                            <div className="flex items-center gap-2">
+                              <button 
+                                onClick={() => handleExportTxt(scanResult)}
+                                className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-950 hover:bg-slate-900 border border-slate-900 hover:border-red-500/30 rounded text-[9px] text-slate-400 hover:text-red-400 transition-all cursor-pointer font-bold"
+                              >
+                                <FileDown className="h-3 w-3" /> TXT
+                              </button>
+                              <button 
+                                onClick={() => handleExportJson(scanResult)}
+                                className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-950 hover:bg-slate-900 border border-slate-900 hover:border-cyan-500/30 rounded text-[9px] text-slate-400 hover:text-cyan-400 transition-all cursor-pointer font-bold"
+                              >
+                                <FileJson className="h-3 w-3" /> JSON
+                              </button>
+                              <span className="text-[10px] text-red-400 font-bold ml-2">AI COMPILED</span>
+                            </div>
                           </h4>
 
                           <div className="prose prose-invert max-w-none text-xs text-slate-300 leading-relaxed font-mono">
@@ -1144,7 +2148,8 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                )}
+                </div>
+              )}
 
                 {/* Secure Google Drive Vault Panel */}
                 {activeTab === "drive" && (
